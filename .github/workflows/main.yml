@@ -1,0 +1,60 @@
+
+name: CompanyScope AI - Live Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Download project files
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest requests
+
+      - name: Test Python modules
+        run: |
+          python -m compileall -q app.py engine.py intelligence.py live_pipeline.py monitoring.py official_ir.py
+
+      - name: Test internet connectivity
+        run: |
+          python - <<'PY'
+          import requests
+
+          urls = {
+              "Apple Investor Relations": "https://investor.apple.com/",
+              "Siemens Investor Relations": "https://www.siemens.com/investor/",
+              "LVMH Investors": "https://www.lvmh.com/investors/",
+              "Unilever Investors": "https://www.unilever.com/investors/",
+              "Tata Motors": "https://www.tatamotors.com/",
+              "SEC Company Facts": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json"
+          }
+
+          for name, url in urls.items():
+              try:
+                  response = requests.get(
+                      url,
+                      timeout=20,
+                      headers={
+                          "User-Agent": "CompanyScopeAI Research contact research@example.org"
+                      }
+                  )
+                  print(f"{name}: HTTP {response.status_code}, bytes={len(response.content)}")
+              except requests.RequestException as error:
+                  print(f"{name}: ERROR {error}")
+          PY
