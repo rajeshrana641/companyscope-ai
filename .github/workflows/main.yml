@@ -56,5 +56,79 @@ jobs:
                   )
                   print(f"{name}: HTTP {response.status_code}, bytes={len(response.content)}")
               except requests.RequestException as error:
+              
+      - name: Analyze Apple financial data
+        run: |
+          python - <<'PY'
+          import requests
+          from datetime import datetime, timezone
+
+          url = "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json"
+          headers = {
+              "User-Agent": "CompanyScopeAI contact your-real-email@example.com",
+              "Accept-Encoding": "gzip, deflate"
+          }
+
+          response = requests.get(url, headers=headers, timeout=30)
+          response.raise_for_status()
+          data = response.json()
+
+          print("COMPANY:", data.get("entityName"))
+          print("CHECKED:", datetime.now(timezone.utc).isoformat())
+
+          facts = data["facts"]["us-gaap"]
+
+          metrics = {
+              "Revenue": [
+                  "RevenueFromContractWithCustomerExcludingAssessedTax",
+                  "Revenues"
+              ],
+              "Net income": ["NetIncomeLoss"],
+              "Operating income": ["OperatingIncomeLoss"],
+              "Operating cash flow": [
+                  "NetCashProvidedByUsedInOperatingActivities"
+              ],
+              "Cash and equivalents": [
+                  "CashAndCashEquivalentsAtCarryingValue"
+              ],
+              "Long-term debt": ["LongTermDebtNoncurrent"]
+          }
+
+          for label, tags in metrics.items():
+              fact = next((facts[t] for t in tags if t in facts), None)
+
+              if not fact:
+                  print(f"{label}: NOT AVAILABLE")
+                  continue
+
+              entries = [
+                  x for x in fact["units"].get("USD", [])
+                  if x.get("form") in ("10-K", "10-Q")
+                  and x.get("filed")
+              ]
+
+              if not entries:
+                  print(f"{label}: NO MATCHING FILINGS")
+                  continue
+
+              latest = max(
+                  entries,
+                  key=lambda x: (
+                      x["filed"],
+                      x.get("end", ""),
+                      x.get("start", "")
+                  )
+              )
+
+              print(
+                  f"{label}: USD {latest['val']:,} "
+                  f"| period={latest.get('start', 'instant')} "
+                  f"to {latest.get('end')} "
+                  f"| filed={latest['filed']} "
+                  f"| form={latest['form']} "
+                  f"| accession={latest.get('accn')}"
+              )
+              PY
+
                   print(f"{name}: ERROR {error}")
           PY
