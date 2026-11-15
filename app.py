@@ -1,43 +1,44 @@
-import json, os
+import os
 import streamlit as st
-from engine import run
-from intelligence import classify_evidence, filter_news
-st.set_page_config(page_title='CompanyScope AI',page_icon='📊',layout='wide')
-st.title('CompanyScope AI')
-st.caption('Evidence-first public company intelligence · U.S. SEC pilot')
-query=st.text_input('Company name, ticker or website','AAPL')
-st.info('Website-name matching is tentative, not verified. U.S. listed issuers only in this prototype.')
-if st.button('Analyze company',type='primary'):
+from engine import configure_contact,fetch_json,ticker_candidates,evaluate,filing_url,TICKERS,SEC
+st.set_page_config(page_title='CompanyScope Risk | Public Beta',layout='wide')
+st.title('CompanyScope Risk')
+st.caption('Free public beta · US SEC filers only · Not investment advice or a credit rating')
+email=os.getenv('SEC_CONTACT_EMAIL','')
+if not email:
+    st.error('Site owner must configure SEC_CONTACT_EMAIL in hosting secrets before using live SEC data.')
+    st.stop()
+try: configure_contact(email)
+except ValueError as e: st.error(str(e)); st.stop()
+@st.cache_data(ttl=86400,show_spinner=False)
+def tickers(): return fetch_json(TICKERS)
+@st.cache_data(ttl=21600,show_spinner=False)
+def company_facts(cik): return fetch_json(f'{SEC}/api/xbrl/companyfacts/CIK{cik:010d}.json')
+query=st.text_input('Enter US-listed company name or ticker',placeholder='e.g. MSFT or Microsoft')
+if query:
     try:
-        with st.spinner('Retrieving official SEC data…'):
-            report=run(query,os.getenv('SEC_CONTACT_EMAIL',''))
-        st.subheader(f"{report['company']} · {report['ticker']}")
-        for name,item in report['metrics'].items():
-            if not isinstance(item,dict):continue
-            if item['history']:
-                x=item['history'][-1]; st.metric(name.replace('_',' ').title(),f"${x['value']/1e9:,.2f}B",f"{item['yoy_percent']}% YoY" if item['yoy_percent'] is not None else None)
-                st.caption(f"FY ending {x['period_end']} · filed {x['filed']} · [SEC filing archive]({x['source']})")
-            else:st.write(f"{name.replace('_',' ').title()}: Not available in supported taxonomy")
-        st.subheader('Rule-based warning indicators')
-        for warning in report['rule_based_warnings']:st.warning(warning)
-        if not report['rule_based_warnings']:st.write('No negative YoY trends detected among available metrics. This is not a clean-risk certification.')
-        st.subheader('Coverage limitations')
-        for note in report['limitations']:st.write('• '+note)
-        st.download_button('Download analysis JSON',json.dumps(report,indent=2),file_name='companyscope_analysis.json',mime='application/json')
-    except Exception as e:st.error(str(e))
-
-
+        candidates=ticker_candidates(query,tickers())
+        if not candidates: st.warning('No SEC ticker match. Try a ticker symbol.'); st.stop()
+        choices={f"{r['ticker']} — {r['title']} (CIK {r['cik_str']})":r for r in candidates}
+        selected=choices[st.selectbox('Confirm reporting entity (do not assume parent/subsidiary equivalence)',list(choices))]
+        if st.button('Analyze verified SEC facts',type='primary'):
+            with st.spinner('Retrieving SEC Company Facts…'):
+                data=company_facts(int(selected['cik_str']))
+            metrics,alerts=evaluate(data)
+            st.subheader(data.get('entityName',selected['title']))
+            st.caption(f"Reporting CIK: {int(selected['cik_str']):010d} · SEC taxonomy data, not a full filing review")
+            for metric,items in metrics.items():
+                with st.expander(metric,expanded=metric in ('Revenue','Operating cash flow')):
+                    if not items: st.write('Not available in supported taxonomy / annual filing selection')
+                    for x in items[:3]:
+                        st.write(f"**{x['end']}**: ${x['value']:,.0f} · filed {x['filed']} · {x['tag']}")
+                        url=filing_url(selected['cik_str'],x['accn'])
+                        if url: st.markdown(f'[SEC accession directory]({url})')
+            st.subheader('Rule-based observations')
+            for a in alerts: st.write('• '+a)
+            st.warning('Not a comprehensive financial-risk rating. Restatements, taxonomy choices, segment data, and the latest 10-Q require separate verification. Do not infer legal-entity equivalence from ticker matches.')
+    except Exception as e:
+        st.error('Unable to retrieve or interpret live SEC data. No report has been generated.')
+        st.caption(f'Diagnostic: {type(e).__name__}: {e}')
 st.divider()
-st.subheader('Evidence triage (experimental)')
-st.caption('Paste a passage from an official filing or trusted third-party source. Findings are candidate indicators, not verified risk conclusions.')
-with st.expander('Analyze a sourced passage'):
-    passage=st.text_area('Source passage')
-    source_url=st.text_input('Direct source URL')
-    published_at=st.date_input('Source publication date').isoformat()
-    source_type=st.selectbox('Source category',['official','regulatory','trusted_third_party'])
-    if st.button('Extract evidence indicators'):
-        try:
-            findings=classify_evidence(passage,source_url,published_at,source_type)
-            if findings: st.json(findings)
-            else: st.info('No supported trigger phrases detected; this is not evidence of zero risk.')
-        except ValueError as exc:st.error(str(exc))
+st.caption('Data source: US Securities and Exchange Commission (SEC). No paid AI API is used. This beta stores no reports in a database.')
